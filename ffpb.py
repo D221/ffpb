@@ -2,6 +2,7 @@
 # coding: utf-8
 
 # Copyright (c) 2017-2021 Martin Larralde <martin.larralde@ens-paris-saclay.fr>
+# Copyright (c) 2022 D221
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -117,7 +118,7 @@ class ProgressNotifier:
                     dynamic_ncols=True,  # dynamicly adjust progress bar length
                     ncols=0,
                     ascii=os.name == "nt",  # windows cmd has problems with unicode
-                    bar_format='{l_bar}{bar}[{elapsed}/{remaining}{postfix}]'
+                    bar_format='{l_bar}{bar}|[{elapsed}/{remaining}{postfix}]'
                 )
 
             self.pbar.update(current - self.pbar.n)
