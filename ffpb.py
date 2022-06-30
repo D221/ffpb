@@ -24,32 +24,21 @@
 """A progress bar for `ffmpeg` using `tqdm`.
 """
 
-from __future__ import unicode_literals
-from __future__ import print_function
-
-import locale
 import os
 import re
 import signal
 import sys
 import subprocess
 
-if sys.version_info < (3, 0):
-    import Queue as queue
-    input = raw_input
-else:
-    import queue
-    unicode = str
-
 from tqdm import tqdm
 
 
-class ProgressNotifier(object):
+class ProgressNotifier:
+    '''Displays progress bar for ffmpeg.'''
 
     _DURATION_RX = re.compile(b"Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}")
     _PROGRESS_RX = re.compile(b"time=(\d{2}):(\d{2}):(\d{2})\.\d{2}")
-    _SOURCE_RX = re.compile(b"from '(.*)':")
-    _FPS_RX = re.compile(b"(\d{2}\.\d{2}|\d{2}) fps")
+    _OUTPUT_RX = re.compile(b"to '(.*)':")
 
     @staticmethod
     def _seconds(hours, minutes, seconds):
@@ -62,102 +51,91 @@ class ProgressNotifier(object):
         if self.pbar is not None:
             self.pbar.close()
 
-    def __init__(self, file=None, encoding=None, tqdm=tqdm):
+    def __init__(self, file=None):
         self.lines = []
         self.line_acc = bytearray()
         self.duration = None
         self.source = None
-        self.started = False
         self.pbar = None
-        self.fps = None
         self.file = file or sys.stderr
-        self.encoding = encoding or locale.getpreferredencoding() or 'UTF-8'
-        self.tqdm = tqdm
+        self.encoding = 'UTF-8'
 
-    def __call__(self, char, stdin = None):
-        if isinstance(char, unicode):
+    def __call__(self, char, stdin=None):
+        if isinstance(char, str):
             char = char.encode('ascii')
         if char in b"\r\n":
             line = self.newline()
             if self.duration is None:
                 self.duration = self.get_duration(line)
             if self.source is None:
-                self.source = self.get_source(line)
-            if self.fps is None:
-                self.fps = self.get_fps(line)
+                self.source = self.get_output(line)
             self.progress(line)
         else:
             self.line_acc.extend(char)
             if self.line_acc[-6:] == bytearray(b"[y/N] "):
-                print(self.line_acc.decode(self.encoding), end="", file=self.file)
+                print(self.line_acc.decode(self.encoding),
+                      end="", file=self.file)
                 self.file.flush()
                 if stdin:
                     stdin.put(input() + "\n")
                 self.newline()
 
     def newline(self):
+        '''Prints new line.'''
         line = bytes(self.line_acc)
         self.lines.append(line)
         self.line_acc = bytearray()
         return line
 
-    def get_fps(self, line):
-        search = self._FPS_RX.search(line)
-        if search is not None:
-            return round(float(search.group(1)))
-        return None
-
     def get_duration(self, line):
+        '''Gets duration from ffmpeg.'''
         search = self._DURATION_RX.search(line)
         if search is not None:
             return self._seconds(*search.groups())
         return None
 
-    def get_source(self, line):
-        search = self._SOURCE_RX.search(line)
+    def get_output(self, line):
+        '''Gets output filename from ffmpeg.'''
+        search = self._OUTPUT_RX.search(line)
         if search is not None:
             return os.path.basename(search.group(1).decode(self.encoding))
         return None
 
     def progress(self, line):
+        '''Displays tqdm progress bar.'''
         search = self._PROGRESS_RX.search(line)
         if search is not None:
 
-            total = self.duration
-            current = self._seconds(*search.groups())
-            unit = " seconds"
-
-            if self.fps is not None:
-                unit = " frames"
-                current *= self.fps
-                if total:
-                    total *= self.fps
+            total = self.duration  # gets track duration
+            current = self._seconds(*search.groups())  # gets current progress
 
             if self.pbar is None:
-                self.pbar = self.tqdm(
+                self.pbar = tqdm(
                     desc=self.source,
                     file=self.file,
                     total=total,
-                    dynamic_ncols=True,
-                    unit=unit,
+                    dynamic_ncols=True,  # dynamicly adjust progress bar length
                     ncols=0,
-                    ascii=os.name=="nt",  # windows cmd has problems with unicode
+                    ascii=os.name == "nt",  # windows cmd has problems with unicode
+                    bar_format='{l_bar}{bar}[{elapsed}/{remaining}{postfix}]'
                 )
 
             self.pbar.update(current - self.pbar.n)
 
-def main(argv=None, stream=sys.stderr, encoding=None, tqdm=tqdm):
+
+def main(argv=None, stream=sys.stderr):
+    '''Parse ffmpeg input.'''
     argv = argv or sys.argv[1:]
 
     try:
-        with ProgressNotifier(file=stream, encoding=encoding, tqdm=tqdm) as notifier:
+        with ProgressNotifier(file=stream) as notifier:
 
             cmd = ["ffmpeg"] + argv
-            p = subprocess.Popen(cmd, stderr=subprocess.PIPE)
+            _process = subprocess.Popen(cmd, stderr=subprocess.PIPE)
 
             while True:
-                out = p.stderr.read(1)
-                if out == b"" and p.poll() != None:
+                out = _process.stderr.read(1)
+                if out == b"" and _process.poll() is not None:
                     break
                 if out != b"":
                     notifier(out)
@@ -166,14 +144,10 @@ def main(argv=None, stream=sys.stderr, encoding=None, tqdm=tqdm):
         print("Exiting.", file=stream)
         return signal.SIGINT + 128  # POSIX standard
 
-    except Exception as err:
-        print("Unexpected exception:", err, file=stream)
-        return 1
-
     else:
-        if p.returncode != 0:
+        if _process.returncode != 0:
             print(notifier.lines[-1].decode(notifier.encoding), file=stream)
-        return p.returncode
+        return _process.returncode
 
 
 if __name__ == "__main__":
